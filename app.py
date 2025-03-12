@@ -10,7 +10,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///offices.db')
+
+# Configure database - handle Heroku PostgreSQL URL
+database_url = os.environ.get('DATABASE_URL', 'sqlite:///offices.db')
+# Heroku Postgres uses postgres:// but SQLAlchemy needs postgresql://
+if database_url and database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
@@ -56,7 +63,7 @@ def verify_password(username, password):
 def unauthorized():
     return jsonify({'error': 'Unauthorized access'}), 401
 
-# GET route for office page - now requires authentication and handles / correctly
+# GET route for office page - requires authentication and handles / correctly
 @app.route('/offices/<state_token>/<office_token>/areas/<area_served_token>/services/<service_token>/page', methods=['GET'])
 @auth.login_required
 def get_office_page(state_token, office_token, area_served_token, service_token):
@@ -126,5 +133,14 @@ def create_office_page():
         'message': 'Page created successfully'
     }), 201
 
+# Health check endpoint
+@app.route('/', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'healthy',
+        'message': 'Office Services API is running'
+    })
+
 if __name__ == '__main__':
-    app.run(debug=os.environ.get('FLASK_DEBUG', False))
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=os.environ.get('FLASK_DEBUG', False))
