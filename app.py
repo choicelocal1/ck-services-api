@@ -63,7 +63,7 @@ def verify_password(username, password):
 def unauthorized():
     return jsonify({'error': 'Unauthorized access'}), 401
 
-# GET route for office page - requires authentication and handles / correctly
+# Modified GET route for office page with simplified response format
 @app.route('/offices/<state_token>/<office_token>/areas/<area_served_token>/services/<service_token>/page', methods=['GET'])
 @auth.login_required
 def get_office_page(state_token, office_token, area_served_token, service_token):
@@ -79,6 +79,7 @@ def get_office_page(state_token, office_token, area_served_token, service_token)
     if not page:
         return jsonify({'error': 'Page not found'}), 404
     
+    # Return the JSON data in the requested format
     return jsonify({
         'id': page.id,
         'state_office_token': page.state_office_token,
