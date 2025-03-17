@@ -63,33 +63,40 @@ def verify_password(username, password):
 def unauthorized():
     return jsonify({'error': 'Unauthorized access'}), 401
 
-# Modified GET route for office page with simplified response format
-@app.route('/offices/<state_token>/<office_token>/areas/<area_served_token>/services/<service_token>/page', methods=['GET'])
+# New service lookup endpoint without office token
+@app.route('/services/<state_token>/<area_served_token>/<service_token>', methods=['GET'])
 @auth.login_required
-def get_office_page(state_token, office_token, area_served_token, service_token):
-    # Using slash format to match your data
-    state_office_token = f"{state_token}/{office_token}"
+def get_service_info(state_token, area_served_token, service_token):
+    # Find all matching pages by partial matching on state_office_token
+    pages = OfficePage.query.filter(
+        OfficePage.state_office_token.like(f"{state_token}/%"),
+        OfficePage.area_served_token == area_served_token,
+        OfficePage.service_token == service_token
+    ).all()
     
-    page = OfficePage.query.filter_by(
-        state_office_token=state_office_token,
-        area_served_token=area_served_token,
-        service_token=service_token
-    ).first()
+    if not pages:
+        return jsonify({'error': 'No matching service found'}), 404
     
-    if not page:
-        return jsonify({'error': 'Page not found'}), 404
+    # Format the response
+    results = []
+    for page in pages:
+        results.append({
+            'id': page.id,
+            'state_office_token': page.state_office_token,
+            'area_served_token': page.area_served_token,
+            'service_token': page.service_token,
+            'meta_title': page.meta_title,
+            'meta_description': page.meta_description,
+            'page_title': page.page_title,
+            'page_content': page.page_content
+        })
     
-    # Return the JSON data in the requested format
-    return jsonify({
-        'id': page.id,
-        'state_office_token': page.state_office_token,
-        'area_served_token': page.area_served_token,
-        'service_token': page.service_token,
-        'meta_title': page.meta_title,
-        'meta_description': page.meta_description,
-        'page_title': page.page_title,
-        'page_content': page.page_content
-    })
+    # If only one result is found, return it directly as a single object
+    if len(results) == 1:
+        return jsonify(results[0])
+    
+    # Otherwise return all matching results
+    return jsonify(results)
 
 # New GET route to list services for an area - requires authentication
 @app.route('/offices/<state_token>/<office_token>/areas/<area_served_token>/services', methods=['GET'])
