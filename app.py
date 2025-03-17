@@ -27,7 +27,7 @@ auth = HTTPBasicAuth()
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
+    password_hash = db.Column(db.String(128), nullable=False)
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
@@ -89,6 +89,35 @@ def get_office_page(state_token, office_token, area_served_token, service_token)
         'page_title': page.page_title,
         'page_content': page.page_content
     })
+
+# New GET route to list services for an area - requires authentication
+@app.route('/offices/<state_token>/<office_token>/areas/<area_served_token>/services', methods=['GET'])
+@auth.login_required
+def get_area_services(state_token, office_token, area_served_token):
+    # Using slash format to match your data
+    state_office_token = f"{state_token}/{office_token}"
+    
+    # Query for all pages matching the state_office_token and area_served_token
+    pages = OfficePage.query.filter_by(
+        state_office_token=state_office_token,
+        area_served_token=area_served_token
+    ).all()
+    
+    if not pages:
+        return jsonify({'error': 'No services found for this area'}), 404
+    
+    # Format the response to include only the required fields
+    services = []
+    for page in pages:
+        services.append({
+            'id': page.id,
+            'state_office_token': page.state_office_token,
+            'area_served_token': page.area_served_token,
+            'service_token': page.service_token,
+            'service_page': page.page_title
+        })
+    
+    return jsonify(services)
 
 # POST route to create a new office page - already requires authentication
 @app.route('/offices', methods=['POST'])
