@@ -197,6 +197,21 @@ def get_office_sitemap(state_token, office_token):
     # The route has .xml extension but we're returning JSON as requested
     return jsonify(services)
 
+# GET endpoint for sitemap index with all distinct state_office_tokens
+@app.route('/sitemap-index.json', methods=['GET'])
+@auth.login_required
+def get_sitemap_index():
+    # Query for all distinct state_office_tokens
+    # We need to use db.session.query instead of OfficePage.query
+    # to get distinct values easily
+    distinct_tokens = db.session.query(OfficePage.state_office_token).distinct().all()
+    
+    # Format the response
+    # Extract the first item from each tuple returned by the query
+    tokens = [token[0] for token in distinct_tokens]
+    
+    return jsonify(tokens)
+
 # Health check endpoint
 @app.route('/', methods=['GET'])
 def health_check():
