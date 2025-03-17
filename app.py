@@ -170,6 +170,33 @@ def create_office_page():
         'message': 'Page created successfully'
     }), 201
 
+# GET endpoint for office sitemap in JSON format
+@app.route('/offices/<state_token>/<office_token>/areas/services/sitemap.xml', methods=['GET'])
+@auth.login_required
+def get_office_sitemap(state_token, office_token):
+    # Using slash format to match your data
+    state_office_token = f"{state_token}/{office_token}"
+    
+    # Query for all pages matching the state_office_token
+    pages = OfficePage.query.filter_by(
+        state_office_token=state_office_token
+    ).all()
+    
+    if not pages:
+        return jsonify({'error': 'No services found for this office'}), 404
+    
+    # Format the response to include only the required fields
+    services = []
+    for page in pages:
+        services.append({
+            'state_office_token': page.state_office_token,
+            'area_served_token': page.area_served_token,
+            'service_token': page.service_token
+        })
+    
+    # The route has .xml extension but we're returning JSON as requested
+    return jsonify(services)
+
 # Health check endpoint
 @app.route('/', methods=['GET'])
 def health_check():
