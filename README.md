@@ -7,8 +7,10 @@ A Flask REST API for managing office service pages with authentication. This API
 - Secure authentication using HTTP Basic Auth
 - Create new office service pages
 - Retrieve office service information
+- Multiple endpoints for flexible data retrieval
 - SQLite database for development, PostgreSQL for production
 - Automated daily import from Google Sheets
+- Comprehensive error handling
 - Ready for Heroku deployment
 
 ## Installation
@@ -65,6 +67,14 @@ A Flask REST API for managing office service pages with authentication. This API
 
 All endpoints require HTTP Basic Authentication.
 
+### Health Check
+
+```
+GET /
+```
+
+Returns the health status of the API.
+
 ### GET Office Page
 
 ```
@@ -75,6 +85,38 @@ Example:
 ```bash
 curl -u username:password "http://localhost:5000/offices/tennessee/chattanooga/areas/lookout-mountain/services/care-services/page"
 ```
+
+### Get Services by Area
+
+```
+GET /offices/:state_token/:office_token/areas/:area_served_token/services
+```
+
+Returns all services available for a specific office location and area.
+
+### Get Services by State, Area, and Service (without specifying office)
+
+```
+GET /services/:state_token/:area_served_token/:service_token
+```
+
+Returns service information based on state, area, and service tokens without requiring an office token.
+
+### Get Office Sitemap
+
+```
+GET /offices/:state_token/:office_token/areas/services/sitemap.xml
+```
+
+Returns a JSON list of all areas and services for a specific office location.
+
+### Get All Office Locations
+
+```
+GET /sitemap-index.json
+```
+
+Returns a list of all unique state_office_tokens in the database.
 
 ### Create Office Page
 
@@ -97,6 +139,25 @@ curl -X POST "http://localhost:5000/offices" \
     "page_content": "Page content goes here"
   }'
 ```
+
+## Error Handling
+
+The API provides comprehensive error handling with consistent JSON responses:
+
+```json
+{
+  "error": "Error Type",
+  "message": "Detailed description of the error",
+  "status_code": 400
+}
+```
+
+Common error codes:
+- 400: Bad Request - Missing or invalid parameters
+- 401: Unauthorized - Authentication required
+- 404: Not Found - Resource not found
+- 409: Conflict - Resource already exists
+- 500: Internal Server Error - Server-side error
 
 ## Database Management
 
@@ -158,8 +219,6 @@ For Heroku deployment, follow these steps to set up automatic daily imports:
    heroku logs --tail --ps scheduler
    ```
 
-**Note:** Heroku Scheduler uses UTC time. You may need to adjust the scheduled time twice a year due to daylight saving time changes.
-
 ## Deployment
 
 ### Heroku Deployment
@@ -204,8 +263,8 @@ For Heroku deployment, follow these steps to set up automatic daily imports:
 
 - Always use strong passwords for API users
 - The .env file contains sensitive information and should not be committed to version control
+- Store API keys and credentials as environment variables, never in code
 - In production, use HTTPS to secure API communications
-- Store API keys securely and never commit them to version control
 
 ## License
 
