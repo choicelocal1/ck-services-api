@@ -238,11 +238,9 @@ def import_sheet_to_db():
                 # Log summary of errors if any occurred
                 if error_details:
                     logger.error(f"Error Summary - Total errors: {len(error_details)}")
-                    logger.error("First 5 detailed errors:")
-                    for i, error in enumerate(error_details[:5]):
+                    logger.error("All detailed errors:")
+                    for i, error in enumerate(error_details):
                         logger.error(f"Error {i+1}:\n{error}")
-                    if len(error_details) > 5:
-                        logger.error(f"... and {len(error_details) - 5} more errors")
                 
             except Exception as e:
                 db.session.rollback()
