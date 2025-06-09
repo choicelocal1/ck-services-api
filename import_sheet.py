@@ -62,6 +62,11 @@ def deduplicate_data(df):
     
     if duplicate_count > 0:
         logger.warning(f"Found {duplicate_count} completely duplicate entries in Google Sheet data")
+        # Log some examples of duplicate rows
+        duplicate_rows = df[df.duplicated(keep=False)]
+        for idx, row in duplicate_rows.head(5).iterrows():
+            logger.warning(f"Duplicate row {idx + 2}: {row['state_office_token']}, {row['area_served_token']}, {row['service_token']}")
+        
         # Keep only unique rows (checking all columns)
         df = df.drop_duplicates()
         logger.info(f"After removing exact duplicates, {len(df)} rows remain")
@@ -72,6 +77,16 @@ def deduplicate_data(df):
     constraint_dupes = df.duplicated(subset=['state_office_token', 'area_served_token', 'service_token']).sum()
     if constraint_dupes > 0:
         logger.warning(f"Warning: {constraint_dupes} rows have duplicate key constraints (state_office_token, area_served_token, service_token)")
+        
+        # Log detailed information about constraint duplicates
+        constraint_duplicate_rows = df[df.duplicated(subset=['state_office_token', 'area_served_token', 'service_token'], keep=False)]
+        logger.warning("Constraint duplicate details:")
+        for idx, row in constraint_duplicate_rows.head(10).iterrows():
+            logger.warning(f"  Row {idx + 2}: {row['state_office_token']} | {row['area_served_token']} | {row['service_token']} | Title: {row.get('page_title', 'N/A')}")
+        
+        if len(constraint_duplicate_rows) > 10:
+            logger.warning(f"  ... and {len(constraint_duplicate_rows) - 10} more duplicate constraint rows")
+        
         logger.warning("These may cause database errors during import if not handled individually")
     
     return df
@@ -94,6 +109,9 @@ def import_sheet_to_db():
         # Get data from Google Sheets API
         df = get_sheet_data(sheet_id, api_key)
         
+        # Reset index to have consistent row numbering
+        df = df.reset_index(drop=True)
+        
         # Verify required columns exist
         required_columns = [
             'state_office_token', 'area_served_token', 'service_token',
@@ -105,6 +123,7 @@ def import_sheet_to_db():
         if missing_columns:
             error_msg = f"Missing required columns in Google Sheet: {', '.join(missing_columns)}"
             logger.error(error_msg)
+            logger.error(f"Available columns: {', '.join(df.columns.tolist())}")
             raise Exception(error_msg)
         
         # Deduplicate the data before importing
@@ -115,15 +134,18 @@ def import_sheet_to_db():
             try:
                 # Delete all existing pages
                 logger.info("Deleting existing pages...")
+                deleted_count = OfficePage.query.count()
                 OfficePage.query.delete()
+                logger.info(f"Deleted {deleted_count} existing pages")
                 
                 # Insert new pages
                 logger.info(f"Importing {len(df)} pages...")
                 success_count = 0
                 error_count = 0
+                error_details = []
                 
                 # Process in smaller batches to avoid issues with very large sheets
-                batch_size = 100
+                batch_size = 50  # Reduced batch size for better error tracking
                 total_batches = (len(df) + batch_size - 1) // batch_size
                 
                 for batch_num in range(total_batches):
@@ -131,48 +153,106 @@ def import_sheet_to_db():
                     end_idx = min(start_idx + batch_size, len(df))
                     batch = df.iloc[start_idx:end_idx]
                     
-                    logger.info(f"Processing batch {batch_num + 1}/{total_batches} ({start_idx}-{end_idx})")
+                    logger.info(f"Processing batch {batch_num + 1}/{total_batches} (rows {start_idx + 2}-{end_idx + 1} in sheet)")
                     
-                    for _, row in batch.iterrows():
+                    batch_success = 0
+                    batch_errors = 0
+                    
+                    for df_idx, row in batch.iterrows():
+                        sheet_row_num = df_idx + 2  # +2 because: +1 for 0-based index, +1 for header row
                         try:
                             # Convert any NaN values to empty strings
                             row = row.fillna('')
                             
+                            # Validate that required fields are not empty
+                            empty_required_fields = []
+                            for field in required_columns:
+                                if not str(row[field]).strip():
+                                    empty_required_fields.append(field)
+                            
+                            if empty_required_fields:
+                                error_msg = f"Row {sheet_row_num}: Empty required fields: {', '.join(empty_required_fields)}"
+                                logger.error(error_msg)
+                                error_details.append(error_msg)
+                                batch_errors += 1
+                                error_count += 1
+                                continue
+                            
                             office_page = OfficePage(
-                                state_office_token=str(row['state_office_token']),
-                                area_served_token=str(row['area_served_token']),
-                                service_token=str(row['service_token']),
-                                meta_title=str(row['meta_title']),
-                                meta_description=str(row['meta_description']),
-                                page_title=str(row['page_title']),
-                                page_content=str(row['page_content'])
+                                state_office_token=str(row['state_office_token']).strip(),
+                                area_served_token=str(row['area_served_token']).strip(),
+                                service_token=str(row['service_token']).strip(),
+                                meta_title=str(row['meta_title']).strip(),
+                                meta_description=str(row['meta_description']).strip(),
+                                page_title=str(row['page_title']).strip(),
+                                page_content=str(row['page_content']).strip()
                             )
                             db.session.add(office_page)
                             db.session.flush()  # Check constraints without committing
+                            batch_success += 1
                             success_count += 1
+                            
                         except IntegrityError as e:
-                            # If there's a constraint violation, log it and continue
+                            # If there's a constraint violation, log detailed information
                             db.session.rollback()
-                            logger.warning(f"Skipping duplicate entry: {row['state_office_token']}, {row['area_served_token']}, {row['service_token']}")
+                            error_msg = f"Row {sheet_row_num}: Duplicate key constraint violation"
+                            detailed_msg = f"  - state_office_token: '{row['state_office_token']}'"
+                            detailed_msg += f"\n  - area_served_token: '{row['area_served_token']}'"
+                            detailed_msg += f"\n  - service_token: '{row['service_token']}'"
+                            detailed_msg += f"\n  - page_title: '{row.get('page_title', 'N/A')}'"
+                            detailed_msg += f"\n  - Database error: {str(e.orig)}"
+                            
+                            logger.error(error_msg)
+                            logger.error(detailed_msg)
+                            error_details.append(f"{error_msg}\n{detailed_msg}")
+                            batch_errors += 1
                             error_count += 1
+                            
                         except Exception as e:
                             db.session.rollback()
-                            logger.error(f"Error processing row: {str(e)}")
+                            error_msg = f"Row {sheet_row_num}: Unexpected error during processing"
+                            detailed_msg = f"  - state_office_token: '{row['state_office_token']}'"
+                            detailed_msg += f"\n  - area_served_token: '{row['area_served_token']}'"
+                            detailed_msg += f"\n  - service_token: '{row['service_token']}'"
+                            detailed_msg += f"\n  - Error: {str(e)}"
+                            detailed_msg += f"\n  - Error type: {type(e).__name__}"
+                            
+                            logger.error(error_msg)
+                            logger.error(detailed_msg)
+                            error_details.append(f"{error_msg}\n{detailed_msg}")
+                            batch_errors += 1
                             error_count += 1
                     
                     # Commit each batch
-                    db.session.commit()
-                    logger.info(f"Committed batch {batch_num + 1}")
+                    try:
+                        db.session.commit()
+                        logger.info(f"Committed batch {batch_num + 1}: {batch_success} successful, {batch_errors} errors")
+                    except Exception as e:
+                        db.session.rollback()
+                        logger.error(f"Failed to commit batch {batch_num + 1}: {str(e)}")
+                        error_count += batch_success  # Count successful ones as errors since they weren't committed
+                        success_count -= batch_success
                 
-                logger.info(f"Import completed successfully: {success_count} pages imported, {error_count} errors")
+                logger.info(f"Import completed: {success_count} pages imported successfully, {error_count} errors encountered")
+                
+                # Log summary of errors if any occurred
+                if error_details:
+                    logger.error(f"Error Summary - Total errors: {len(error_details)}")
+                    logger.error("First 5 detailed errors:")
+                    for i, error in enumerate(error_details[:5]):
+                        logger.error(f"Error {i+1}:\n{error}")
+                    if len(error_details) > 5:
+                        logger.error(f"... and {len(error_details) - 5} more errors")
                 
             except Exception as e:
                 db.session.rollback()
                 logger.error(f"Transaction error: {str(e)}")
+                logger.error(f"Error type: {type(e).__name__}")
                 raise
             
     except Exception as e:
         logger.error(f"Error during import: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
         return False
     
     logger.info(f"Import process finished at {datetime.now()}")
