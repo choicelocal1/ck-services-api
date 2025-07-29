@@ -7,6 +7,8 @@ from flask_httpauth import HTTPBasicAuth
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
 
 # Load environment variables
 load_dotenv()
@@ -51,6 +53,26 @@ class OfficePage(db.Model):
     
     __table_args__ = (
         db.UniqueConstraint('state_office_token', 'area_served_token', 'service_token'),
+    )
+
+# Define the Frandev Page model
+class FrandevPage(db.Model):
+    __tablename__ = 'choicelocal_clai_frandev'
+    __table_args__ = {'schema': 'sundry'}
+    
+    id = db.Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    state_token = db.Column(db.Text, nullable=False)
+    city_token = db.Column(db.Text, nullable=False)
+    clai_page_token = db.Column(db.Text, nullable=False)
+    meta_title = db.Column(db.Text)
+    meta_description = db.Column(db.Text)
+    page_title = db.Column(db.Text)
+    page_content = db.Column(db.Text)
+    link_label = db.Column(db.Text)
+    
+    __table_args__ = (
+        db.UniqueConstraint('state_token', 'city_token', 'clai_page_token'),
+        {'schema': 'sundry'}
     )
 
 # Global error handlers
@@ -450,6 +472,133 @@ def get_sitemap_index():
         }), 500
     except Exception as e:
         app.logger.error(f"Error in get_sitemap_index: {str(e)}")
+        return jsonify({
+            'error': 'Internal Server Error',
+            'message': 'An unexpected error occurred while processing your request',
+            'status_code': 500
+        }), 500
+
+# Frandev API Endpoints
+
+# GET all Frandev pages
+@app.route('/frandev/pages', methods=['GET'])
+@auth.login_required
+def get_all_frandev_pages():
+    try:
+        pages = FrandevPage.query.order_by(
+            FrandevPage.state_token,
+            FrandevPage.city_token,
+            FrandevPage.clai_page_token
+        ).all()
+        
+        result = []
+        for page in pages:
+            result.append({
+                'id': str(page.id),
+                'state_token': page.state_token,
+                'city_token': page.city_token,
+                'clai_page_token': page.clai_page_token,
+                'page_title': page.page_title,
+                'link_label': page.link_label
+            })
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        app.logger.error(f"Error in get_all_frandev_pages: {str(e)}")
+        return jsonify({
+            'error': 'Internal Server Error',
+            'message': 'An unexpected error occurred while processing your request',
+            'status_code': 500
+        }), 500
+
+# GET Frandev pages for a specific state and city
+@app.route('/frandev/states/<state_token>/cities/<city_token>/pages', methods=['GET'])
+@auth.login_required
+def get_frandev_city_pages(state_token, city_token):
+    try:
+        # Validate input parameters
+        if not state_token or not city_token:
+            return jsonify({
+                'error': 'Bad Request',
+                'message': 'All parameters (state_token, city_token) are required',
+                'status_code': 400
+            }), 400
+        
+        pages = FrandevPage.query.filter_by(
+            state_token=state_token,
+            city_token=city_token
+        ).order_by(FrandevPage.page_title).all()
+        
+        if not pages:
+            return jsonify({
+                'error': 'Not Found',
+                'message': f'No pages found for state: {state_token}, city: {city_token}',
+                'status_code': 404
+            }), 404
+        
+        result = []
+        for page in pages:
+            result.append({
+                'id': str(page.id),
+                'state_token': page.state_token,
+                'city_token': page.city_token,
+                'clai_page_token': page.clai_page_token,
+                'page_title': page.page_title,
+                'link_label': page.link_label
+            })
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        app.logger.error(f"Error in get_frandev_city_pages: {str(e)}")
+        return jsonify({
+            'error': 'Internal Server Error',
+            'message': 'An unexpected error occurred while processing your request',
+            'status_code': 500
+        }), 500
+
+# GET specific Frandev page
+@app.route('/frandev/states/<state_token>/cities/<city_token>/pages/<clai_page_token>', methods=['GET'])
+@auth.login_required
+def get_frandev_page(state_token, city_token, clai_page_token):
+    try:
+        # Validate input parameters
+        if not state_token or not city_token or not clai_page_token:
+            return jsonify({
+                'error': 'Bad Request',
+                'message': 'All parameters (state_token, city_token, clai_page_token) are required',
+                'status_code': 400
+            }), 400
+        
+        page = FrandevPage.query.filter_by(
+            state_token=state_token,
+            city_token=city_token,
+            clai_page_token=clai_page_token
+        ).first()
+        
+        if not page:
+            return jsonify({
+                'error': 'Not Found',
+                'message': f'No page found for state: {state_token}, city: {city_token}, page: {clai_page_token}',
+                'status_code': 404
+            }), 404
+        
+        # Return as an array with single element to match the expected format
+        return jsonify([{
+            'id': str(page.id),
+            'state_token': page.state_token,
+            'city_token': page.city_token,
+            'clai_page_token': page.clai_page_token,
+            'meta_title': page.meta_title,
+            'meta_description': page.meta_description,
+            'page_title': page.page_title,
+            'page_content': page.page_content,
+            'link_label': page.link_label
+        }])
+        
+    except Exception as e:
+        app.logger.error(f"Error in get_frandev_page: {str(e)}")
         return jsonify({
             'error': 'Internal Server Error',
             'message': 'An unexpected error occurred while processing your request',
