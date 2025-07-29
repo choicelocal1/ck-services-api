@@ -5,7 +5,7 @@ import os
 import pandas as pd
 import requests
 import logging
-from app import app, db, OfficePage
+from app import app, db, OfficePage, FrandevPage
 from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 
@@ -16,12 +16,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger('import_sheet')
 
-def get_sheet_data(sheet_id, api_key):
+def get_sheet_data(sheet_id, api_key, sheet_name="Sheet1"):
     """
     Download a Google Sheet using the Google Sheets API with API key authentication.
     """
-    logger.info(f"Fetching data from Google Sheet ID: {sheet_id}")
-    base_url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/Sheet1"
+    logger.info(f"Fetching data from Google Sheet ID: {sheet_id}, Sheet: {sheet_name}")
+    base_url = f"https://sheets.googleapis.com/v4/spreadsheets/{sheet_id}/values/{sheet_name}"
     params = {
         "key": api_key,
         "valueRenderOption": "FORMATTED_VALUE",
@@ -52,7 +52,7 @@ def get_sheet_data(sheet_id, api_key):
     
     return df
 
-def deduplicate_data(df):
+def deduplicate_data(df, constraint_columns):
     """
     Remove completely duplicate entries from dataframe (checking all columns)
     """
@@ -65,7 +65,7 @@ def deduplicate_data(df):
         # Log some examples of duplicate rows
         duplicate_rows = df[df.duplicated(keep=False)]
         for idx, row in duplicate_rows.head(5).iterrows():
-            logger.warning(f"Duplicate row {idx + 2}: {row['state_office_token']}, {row['area_served_token']}, {row['service_token']}")
+            logger.warning(f"Duplicate row {idx + 2}: {', '.join([str(row[col]) for col in constraint_columns])}")
         
         # Keep only unique rows (checking all columns)
         df = df.drop_duplicates()
@@ -74,15 +74,15 @@ def deduplicate_data(df):
         logger.info("No exact duplicates found in the data")
     
     # Also log info about constraint duplicates (important for debugging database errors)
-    constraint_dupes = df.duplicated(subset=['state_office_token', 'area_served_token', 'service_token']).sum()
+    constraint_dupes = df.duplicated(subset=constraint_columns).sum()
     if constraint_dupes > 0:
-        logger.warning(f"Warning: {constraint_dupes} rows have duplicate key constraints (state_office_token, area_served_token, service_token)")
+        logger.warning(f"Warning: {constraint_dupes} rows have duplicate key constraints ({', '.join(constraint_columns)})")
         
         # Log detailed information about constraint duplicates
-        constraint_duplicate_rows = df[df.duplicated(subset=['state_office_token', 'area_served_token', 'service_token'], keep=False)]
+        constraint_duplicate_rows = df[df.duplicated(subset=constraint_columns, keep=False)]
         logger.warning("Constraint duplicate details:")
         for idx, row in constraint_duplicate_rows.head(10).iterrows():
-            logger.warning(f"  Row {idx + 2}: {row['state_office_token']} | {row['area_served_token']} | {row['service_token']} | Title: {row.get('page_title', 'N/A')}")
+            logger.warning(f"  Row {idx + 2}: {' | '.join([str(row[col]) for col in constraint_columns])}")
         
         if len(constraint_duplicate_rows) > 10:
             logger.warning(f"  ... and {len(constraint_duplicate_rows) - 10} more duplicate constraint rows")
@@ -91,23 +91,13 @@ def deduplicate_data(df):
     
     return df
 
-def import_sheet_to_db():
-    """Import Google Sheet data into the database."""
-    logger.info(f"Starting import at {datetime.now()}")
-    
-    # Google Sheet ID from the URL
-    sheet_id = "1zGndhNnFpoBFIlh41yh9cEZ7ML4miWRGyuKNuNNlGrs"
-    
-    # Get API key from environment
-    api_key = os.environ.get("GOOGLE_API_KEY")
-    if not api_key:
-        error_msg = "GOOGLE_API_KEY environment variable is not set"
-        logger.error(error_msg)
-        raise ValueError(error_msg)
+def import_office_sheet(sheet_id, api_key):
+    """Import the original office sheet data (Sheet1)"""
+    logger.info("Importing office sheet data...")
     
     try:
         # Get data from Google Sheets API
-        df = get_sheet_data(sheet_id, api_key)
+        df = get_sheet_data(sheet_id, api_key, "Sheet1")
         
         # Reset index to have consistent row numbering
         df = df.reset_index(drop=True)
@@ -127,25 +117,25 @@ def import_sheet_to_db():
             raise Exception(error_msg)
         
         # Deduplicate the data before importing
-        df = deduplicate_data(df)
+        df = deduplicate_data(df, ['state_office_token', 'area_served_token', 'service_token'])
         
         with app.app_context():
             # Start a transaction
             try:
                 # Delete all existing pages
-                logger.info("Deleting existing pages...")
+                logger.info("Deleting existing office pages...")
                 deleted_count = OfficePage.query.count()
                 OfficePage.query.delete()
-                logger.info(f"Deleted {deleted_count} existing pages")
+                logger.info(f"Deleted {deleted_count} existing office pages")
                 
                 # Insert new pages
-                logger.info(f"Importing {len(df)} pages...")
+                logger.info(f"Importing {len(df)} office pages...")
                 success_count = 0
                 error_count = 0
                 error_details = []
                 
                 # Process in smaller batches to avoid issues with very large sheets
-                batch_size = 50  # Reduced batch size for better error tracking
+                batch_size = 50
                 total_batches = (len(df) + batch_size - 1) // batch_size
                 
                 for batch_num in range(total_batches):
@@ -233,13 +223,12 @@ def import_sheet_to_db():
                         error_count += batch_success  # Count successful ones as errors since they weren't committed
                         success_count -= batch_success
                 
-                logger.info(f"Import completed: {success_count} pages imported successfully, {error_count} errors encountered")
+                logger.info(f"Office import completed: {success_count} pages imported successfully, {error_count} errors encountered")
                 
                 # Log summary of errors if any occurred
                 if error_details:
-                    logger.error(f"Error Summary - Total errors: {len(error_details)}")
-                    logger.error("All detailed errors:")
-                    for i, error in enumerate(error_details):
+                    logger.error(f"Office Import Error Summary - Total errors: {len(error_details)}")
+                    for i, error in enumerate(error_details[:5]):  # Show first 5 errors
                         logger.error(f"Error {i+1}:\n{error}")
                 
             except Exception as e:
@@ -249,12 +238,188 @@ def import_sheet_to_db():
                 raise
             
     except Exception as e:
-        logger.error(f"Error during import: {str(e)}")
+        logger.error(f"Error during office import: {str(e)}")
         logger.error(f"Error type: {type(e).__name__}")
-        return False
+        raise
+
+def import_frandev_sheet(sheet_id, api_key):
+    """Import the Frandev sheet data (Fran Dev tab)"""
+    logger.info("Importing Frandev sheet data...")
+    
+    try:
+        # Get data from Google Sheets API
+        df = get_sheet_data(sheet_id, api_key, "Fran Dev")
+        
+        # Reset index to have consistent row numbering
+        df = df.reset_index(drop=True)
+        
+        # Verify required columns exist
+        required_columns = [
+            'state_token', 'city_token', 'clai_page_token',
+            'meta_title', 'meta_description', 'page_title', 'page_content', 'link_label'
+        ]
+        
+        # Check if all required columns exist in the dataframe
+        missing_columns = [col for col in required_columns if col not in df.columns]
+        if missing_columns:
+            error_msg = f"Missing required columns in Frandev sheet: {', '.join(missing_columns)}"
+            logger.error(error_msg)
+            logger.error(f"Available columns: {', '.join(df.columns.tolist())}")
+            raise Exception(error_msg)
+        
+        # Deduplicate the data before importing
+        df = deduplicate_data(df, ['state_token', 'city_token', 'clai_page_token'])
+        
+        with app.app_context():
+            # Start a transaction
+            try:
+                # Delete all existing Frandev pages
+                logger.info("Deleting existing Frandev pages...")
+                deleted_count = FrandevPage.query.count()
+                FrandevPage.query.delete()
+                logger.info(f"Deleted {deleted_count} existing Frandev pages")
+                
+                # Insert new pages
+                logger.info(f"Importing {len(df)} Frandev pages...")
+                success_count = 0
+                error_count = 0
+                error_details = []
+                
+                # Process in smaller batches
+                batch_size = 50
+                total_batches = (len(df) + batch_size - 1) // batch_size
+                
+                for batch_num in range(total_batches):
+                    start_idx = batch_num * batch_size
+                    end_idx = min(start_idx + batch_size, len(df))
+                    batch = df.iloc[start_idx:end_idx]
+                    
+                    logger.info(f"Processing batch {batch_num + 1}/{total_batches} (rows {start_idx + 2}-{end_idx + 1} in sheet)")
+                    
+                    batch_success = 0
+                    batch_errors = 0
+                    
+                    for df_idx, row in batch.iterrows():
+                        sheet_row_num = df_idx + 2
+                        try:
+                            # Convert any NaN values to empty strings
+                            row = row.fillna('')
+                            
+                            # Validate that required fields are not empty
+                            empty_required_fields = []
+                            for field in ['state_token', 'city_token', 'clai_page_token']:
+                                if not str(row[field]).strip():
+                                    empty_required_fields.append(field)
+                            
+                            if empty_required_fields:
+                                error_msg = f"Row {sheet_row_num}: Empty required fields: {', '.join(empty_required_fields)}"
+                                logger.error(error_msg)
+                                error_details.append(error_msg)
+                                batch_errors += 1
+                                error_count += 1
+                                continue
+                            
+                            frandev_page = FrandevPage(
+                                state_token=str(row['state_token']).strip(),
+                                city_token=str(row['city_token']).strip(),
+                                clai_page_token=str(row['clai_page_token']).strip(),
+                                meta_title=str(row['meta_title']).strip() if row.get('meta_title') else '',
+                                meta_description=str(row['meta_description']).strip() if row.get('meta_description') else '',
+                                page_title=str(row['page_title']).strip() if row.get('page_title') else '',
+                                page_content=str(row['page_content']).strip() if row.get('page_content') else '',
+                                link_label=str(row['link_label']).strip() if row.get('link_label') else ''
+                            )
+                            db.session.add(frandev_page)
+                            db.session.flush()
+                            batch_success += 1
+                            success_count += 1
+                            
+                        except IntegrityError as e:
+                            db.session.rollback()
+                            error_msg = f"Row {sheet_row_num}: Duplicate key constraint violation"
+                            detailed_msg = f"  - state_token: '{row['state_token']}'"
+                            detailed_msg += f"\n  - city_token: '{row['city_token']}'"
+                            detailed_msg += f"\n  - clai_page_token: '{row['clai_page_token']}'"
+                            detailed_msg += f"\n  - Database error: {str(e.orig)}"
+                            
+                            logger.error(error_msg)
+                            logger.error(detailed_msg)
+                            error_details.append(f"{error_msg}\n{detailed_msg}")
+                            batch_errors += 1
+                            error_count += 1
+                            
+                        except Exception as e:
+                            db.session.rollback()
+                            error_msg = f"Row {sheet_row_num}: Unexpected error during processing"
+                            detailed_msg = f"  - Error: {str(e)}"
+                            detailed_msg += f"\n  - Error type: {type(e).__name__}"
+                            
+                            logger.error(error_msg)
+                            logger.error(detailed_msg)
+                            error_details.append(f"{error_msg}\n{detailed_msg}")
+                            batch_errors += 1
+                            error_count += 1
+                    
+                    # Commit each batch
+                    try:
+                        db.session.commit()
+                        logger.info(f"Committed batch {batch_num + 1}: {batch_success} successful, {batch_errors} errors")
+                    except Exception as e:
+                        db.session.rollback()
+                        logger.error(f"Failed to commit batch {batch_num + 1}: {str(e)}")
+                        error_count += batch_success
+                        success_count -= batch_success
+                
+                logger.info(f"Frandev import completed: {success_count} pages imported successfully, {error_count} errors encountered")
+                
+                if error_details:
+                    logger.error(f"Frandev Import Error Summary - Total errors: {len(error_details)}")
+                    for i, error in enumerate(error_details[:5]):
+                        logger.error(f"Error {i+1}:\n{error}")
+                
+            except Exception as e:
+                db.session.rollback()
+                logger.error(f"Transaction error: {str(e)}")
+                logger.error(f"Error type: {type(e).__name__}")
+                raise
+            
+    except Exception as e:
+        logger.error(f"Error during Frandev import: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
+        raise
+
+def import_sheet_to_db():
+    """Import both Google Sheet tabs into the database."""
+    logger.info(f"Starting full import at {datetime.now()}")
+    
+    # Google Sheet ID from the URL
+    sheet_id = "1zGndhNnFpoBFIlh41yh9cEZ7ML4miWRGyuKNuNNlGrs"
+    
+    # Get API key from environment
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        error_msg = "GOOGLE_API_KEY environment variable is not set"
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+    
+    overall_success = True
+    
+    # Import office sheet
+    try:
+        import_office_sheet(sheet_id, api_key)
+    except Exception as e:
+        logger.error(f"Failed to import office sheet: {str(e)}")
+        overall_success = False
+    
+    # Import Frandev sheet
+    try:
+        import_frandev_sheet(sheet_id, api_key)
+    except Exception as e:
+        logger.error(f"Failed to import Frandev sheet: {str(e)}")
+        overall_success = False
     
     logger.info(f"Import process finished at {datetime.now()}")
-    return True
+    return overall_success
 
 if __name__ == "__main__":
     import_sheet_to_db()
