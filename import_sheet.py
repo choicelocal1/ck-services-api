@@ -16,6 +16,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger('import_sheet')
 
+# Global error and success tracking
+import_summary = {
+    'office': {
+        'success_count': 0,
+        'error_count': 0,
+        'errors': []
+    },
+    'frandev': {
+        'success_count': 0,
+        'error_count': 0,
+        'errors': []
+    }
+}
+
 def get_sheet_data(sheet_id, api_key, sheet_name="Sheet1"):
     """
     Download a Google Sheet using the Google Sheets API with API key authentication.
@@ -163,7 +177,12 @@ def import_office_sheet(sheet_id, api_key):
                             if empty_required_fields:
                                 error_msg = f"Row {sheet_row_num}: Empty required fields: {', '.join(empty_required_fields)}"
                                 logger.error(error_msg)
-                                error_details.append(error_msg)
+                                error_details.append({
+                                    'row': sheet_row_num,
+                                    'type': 'Empty Required Fields',
+                                    'message': error_msg,
+                                    'details': f"Fields: {', '.join(empty_required_fields)}"
+                                })
                                 batch_errors += 1
                                 error_count += 1
                                 continue
@@ -186,30 +205,32 @@ def import_office_sheet(sheet_id, api_key):
                             # If there's a constraint violation, log detailed information
                             db.session.rollback()
                             error_msg = f"Row {sheet_row_num}: Duplicate key constraint violation"
-                            detailed_msg = f"  - state_office_token: '{row['state_office_token']}'"
-                            detailed_msg += f"\n  - area_served_token: '{row['area_served_token']}'"
-                            detailed_msg += f"\n  - service_token: '{row['service_token']}'"
-                            detailed_msg += f"\n  - page_title: '{row.get('page_title', 'N/A')}'"
-                            detailed_msg += f"\n  - Database error: {str(e.orig)}"
+                            detailed_msg = f"state_office_token: '{row['state_office_token']}', area_served_token: '{row['area_served_token']}', service_token: '{row['service_token']}'"
                             
                             logger.error(error_msg)
-                            logger.error(detailed_msg)
-                            error_details.append(f"{error_msg}\n{detailed_msg}")
+                            logger.error(f"  - {detailed_msg}")
+                            error_details.append({
+                                'row': sheet_row_num,
+                                'type': 'Duplicate Key Constraint',
+                                'message': error_msg,
+                                'details': detailed_msg
+                            })
                             batch_errors += 1
                             error_count += 1
                             
                         except Exception as e:
                             db.session.rollback()
                             error_msg = f"Row {sheet_row_num}: Unexpected error during processing"
-                            detailed_msg = f"  - state_office_token: '{row['state_office_token']}'"
-                            detailed_msg += f"\n  - area_served_token: '{row['area_served_token']}'"
-                            detailed_msg += f"\n  - service_token: '{row['service_token']}'"
-                            detailed_msg += f"\n  - Error: {str(e)}"
-                            detailed_msg += f"\n  - Error type: {type(e).__name__}"
+                            detailed_msg = f"Error: {str(e)} (Type: {type(e).__name__})"
                             
                             logger.error(error_msg)
-                            logger.error(detailed_msg)
-                            error_details.append(f"{error_msg}\n{detailed_msg}")
+                            logger.error(f"  - {detailed_msg}")
+                            error_details.append({
+                                'row': sheet_row_num,
+                                'type': 'Unexpected Error',
+                                'message': error_msg,
+                                'details': detailed_msg
+                            })
                             batch_errors += 1
                             error_count += 1
                     
@@ -223,13 +244,12 @@ def import_office_sheet(sheet_id, api_key):
                         error_count += batch_success  # Count successful ones as errors since they weren't committed
                         success_count -= batch_success
                 
-                logger.info(f"Office import completed: {success_count} pages imported successfully, {error_count} errors encountered")
+                # Update global summary
+                import_summary['office']['success_count'] = success_count
+                import_summary['office']['error_count'] = error_count
+                import_summary['office']['errors'] = error_details
                 
-                # Log summary of errors if any occurred
-                if error_details:
-                    logger.error(f"Office Import Error Summary - Total errors: {len(error_details)}")
-                    for i, error in enumerate(error_details[:5]):  # Show first 5 errors
-                        logger.error(f"Error {i+1}:\n{error}")
+                logger.info(f"Office import completed: {success_count} pages imported successfully, {error_count} errors encountered")
                 
             except Exception as e:
                 db.session.rollback()
@@ -314,7 +334,12 @@ def import_frandev_sheet(sheet_id, api_key):
                             if empty_required_fields:
                                 error_msg = f"Row {sheet_row_num}: Empty required fields: {', '.join(empty_required_fields)}"
                                 logger.error(error_msg)
-                                error_details.append(error_msg)
+                                error_details.append({
+                                    'row': sheet_row_num,
+                                    'type': 'Empty Required Fields',
+                                    'message': error_msg,
+                                    'details': f"Fields: {', '.join(empty_required_fields)}"
+                                })
                                 batch_errors += 1
                                 error_count += 1
                                 continue
@@ -337,26 +362,32 @@ def import_frandev_sheet(sheet_id, api_key):
                         except IntegrityError as e:
                             db.session.rollback()
                             error_msg = f"Row {sheet_row_num}: Duplicate key constraint violation"
-                            detailed_msg = f"  - state_token: '{row['state_token']}'"
-                            detailed_msg += f"\n  - city_token: '{row['city_token']}'"
-                            detailed_msg += f"\n  - clai_page_token: '{row['clai_page_token']}'"
-                            detailed_msg += f"\n  - Database error: {str(e.orig)}"
+                            detailed_msg = f"state_token: '{row['state_token']}', city_token: '{row['city_token']}', clai_page_token: '{row['clai_page_token']}'"
                             
                             logger.error(error_msg)
-                            logger.error(detailed_msg)
-                            error_details.append(f"{error_msg}\n{detailed_msg}")
+                            logger.error(f"  - {detailed_msg}")
+                            error_details.append({
+                                'row': sheet_row_num,
+                                'type': 'Duplicate Key Constraint',
+                                'message': error_msg,
+                                'details': detailed_msg
+                            })
                             batch_errors += 1
                             error_count += 1
                             
                         except Exception as e:
                             db.session.rollback()
                             error_msg = f"Row {sheet_row_num}: Unexpected error during processing"
-                            detailed_msg = f"  - Error: {str(e)}"
-                            detailed_msg += f"\n  - Error type: {type(e).__name__}"
+                            detailed_msg = f"Error: {str(e)} (Type: {type(e).__name__})"
                             
                             logger.error(error_msg)
-                            logger.error(detailed_msg)
-                            error_details.append(f"{error_msg}\n{detailed_msg}")
+                            logger.error(f"  - {detailed_msg}")
+                            error_details.append({
+                                'row': sheet_row_num,
+                                'type': 'Unexpected Error',
+                                'message': error_msg,
+                                'details': detailed_msg
+                            })
                             batch_errors += 1
                             error_count += 1
                     
@@ -370,12 +401,12 @@ def import_frandev_sheet(sheet_id, api_key):
                         error_count += batch_success
                         success_count -= batch_success
                 
-                logger.info(f"Frandev import completed: {success_count} pages imported successfully, {error_count} errors encountered")
+                # Update global summary
+                import_summary['frandev']['success_count'] = success_count
+                import_summary['frandev']['error_count'] = error_count
+                import_summary['frandev']['errors'] = error_details
                 
-                if error_details:
-                    logger.error(f"Frandev Import Error Summary - Total errors: {len(error_details)}")
-                    for i, error in enumerate(error_details[:5]):
-                        logger.error(f"Error {i+1}:\n{error}")
+                logger.info(f"Frandev import completed: {success_count} pages imported successfully, {error_count} errors encountered")
                 
             except Exception as e:
                 db.session.rollback()
@@ -387,6 +418,47 @@ def import_frandev_sheet(sheet_id, api_key):
         logger.error(f"Error during Frandev import: {str(e)}")
         logger.error(f"Error type: {type(e).__name__}")
         raise
+
+def print_final_summary():
+    """Print a comprehensive summary of the entire import process"""
+    total_success = import_summary['office']['success_count'] + import_summary['frandev']['success_count']
+    total_errors = import_summary['office']['error_count'] + import_summary['frandev']['error_count']
+    
+    logger.info("\n" + "="*80)
+    logger.info("FINAL IMPORT SUMMARY")
+    logger.info("="*80)
+    
+    logger.info(f"\nTOTAL PAGES SUCCESSFULLY UPLOADED: {total_success}")
+    logger.info(f"  - Office Pages: {import_summary['office']['success_count']}")
+    logger.info(f"  - Frandev Pages: {import_summary['frandev']['success_count']}")
+    
+    logger.info(f"\nTOTAL ERRORS: {total_errors}")
+    logger.info(f"  - Office Errors: {import_summary['office']['error_count']}")
+    logger.info(f"  - Frandev Errors: {import_summary['frandev']['error_count']}")
+    
+    # Print all Office errors
+    if import_summary['office']['errors']:
+        logger.info("\n" + "-"*40)
+        logger.info("OFFICE SHEET ERRORS:")
+        logger.info("-"*40)
+        for i, error in enumerate(import_summary['office']['errors'], 1):
+            logger.info(f"\n{i}. {error['message']}")
+            logger.info(f"   Type: {error['type']}")
+            logger.info(f"   Details: {error['details']}")
+    
+    # Print all Frandev errors
+    if import_summary['frandev']['errors']:
+        logger.info("\n" + "-"*40)
+        logger.info("FRANDEV SHEET ERRORS:")
+        logger.info("-"*40)
+        for i, error in enumerate(import_summary['frandev']['errors'], 1):
+            logger.info(f"\n{i}. {error['message']}")
+            logger.info(f"   Type: {error['type']}")
+            logger.info(f"   Details: {error['details']}")
+    
+    logger.info("\n" + "="*80)
+    logger.info(f"Import process completed with {total_success} successful uploads and {total_errors} errors")
+    logger.info("="*80)
 
 def import_sheet_to_db():
     """Import both Google Sheet tabs into the database."""
@@ -419,6 +491,10 @@ def import_sheet_to_db():
         overall_success = False
     
     logger.info(f"Import process finished at {datetime.now()}")
+    
+    # Print comprehensive final summary
+    print_final_summary()
+    
     return overall_success
 
 if __name__ == "__main__":
